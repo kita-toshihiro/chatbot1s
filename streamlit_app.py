@@ -1,57 +1,101 @@
 import streamlit as st
-from openai import OpenAI
+import pandas as pd
+import random
 
-# Show title and description.
-st.title("💬 Chatbot site!!")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-4o-mini model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# --- データ読み込み ---
+try:
+    df = pd.read_csv("data.csv")
+except FileNotFoundError:
+    st.error("data.csv が見つかりません。ファイルが存在することを確認してく
+ださい。")
+    st.stop()
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.secrets['openaikey']
-# openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+# --- セッションステートの初期化 ---
+if 'answered' not in st.session_state:
+    st.session_state.answered = []  # 解答履歴
+if 'wrong_words' not in st.session_state:
+    st.session_state.wrong_words = [] # 間違えた単語
+if 'word_index' not in st.session_state:
+    st.session_state.word_index = [] # 出題済みの単語index
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+# --- 関数定義 ---
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+def get_random_word(df, word_index):
+    """ランダムに単語を選び、出題済みの単語を除外する"""
+    available_indices = [i for i in range(len(df)) if i not in word_index]
+    if not available_indices:
+        st.warning("全ての単語が出題されました。")
+        return None, None, None
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    random_index = random.choice(available_indices)
+    word = df.iloc[random_index]['英単語']
+    meaning = df.iloc[random_index]['意味']
+    return word, meaning, random_index
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("ここに入力してください"):
+def check_answer(user_answer, correct_meaning, word, word_index, answered, 
+wrong_words):
+    """解答をチェックし、解答履歴と間違え単語リストを更新する"""
+    if user_answer.strip().lower() == correct_meaning.strip().lower():
+        st.success("正解！")
+        answered.append((word, "正解"))
+    else:
+        st.error(f"不正解。正解は: {correct_meaning}")
+        answered.append((word, "不正解"))
+        wrong_words.append(word)
+    
+    return answered, wrong_words
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+# --- メインアプリケーション ---
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+st.title("TOEIC 600点対策 英単語クイズ")
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+mode = st.sidebar.radio("モードを選択:", ("クイズ", "復習"))
+
+if mode == "クイズ":
+    st.header("クイズモード")
+
+    if st.button("次の問題"):
+        word, meaning, random_index = get_random_word(df, 
+st.session_state.word_index)
+
+        if word is None:
+            st.stop()
+
+        st.session_state.word_index.append(random_index)
+
+        st.write(f"**問題:** {word}")
+        user_answer = st.text_input("意味を入力してください:")
+
+        if st.button("解答"):
+            st.session_state.answered, st.session_state.wrong_words = 
+check_answer(user_answer, meaning, word, st.session_state.word_index, 
+st.session_state.answered, st.session_state.wrong_words)
+
+    # 解答履歴の表示
+    st.subheader("解答履歴")
+    if st.session_state.answered:
+        for word, result in st.session_state.answered:
+            st.write(f"{word}: {result}")
+    else:
+        st.write("まだ解答していません。")
+
+elif mode == "復習":
+    st.header("復習モード")
+
+    if not st.session_state.wrong_words:
+        st.write("間違えた単語はありません。")
+    else:
+        # 間違えた単語のみを出題
+        wrong_words = st.session_state.wrong_words
+        random.shuffle(wrong_words) # 毎回順番を変える
+        
+        for word in wrong_words:
+            meaning = df[df['英単語'] == word]['意味'].values[0]
+            st.write(f"**問題:** {word}")
+            user_answer = st.text_input("意味を入力してください:")
+            if st.button("解答"):
+                if user_answer.strip().lower() == meaning.strip().lower():
+                    st.success("正解！")
+                    st.session_state.wrong_words.remove(word)
+                else:
+                    st.error(f"不正解。正解は: {meaning}")
