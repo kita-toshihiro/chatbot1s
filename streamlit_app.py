@@ -60,13 +60,11 @@ if mode == "Quiz":
     
     # ランダムに単語を選択
     if "current_word" not in st.session_state:
-        st.session_state.current_word = 
-random.choice(words_df.to_dict('records'))
+        st.session_state.current_word = random.choice(words_df.to_dict('records'))
     
     cur = st.session_state.current_word
     st.write(f"**単語:** {cur['word']}")
-    st.write(f"**意味（ヒント）:** {cur['meaning'][:3]}...")  # 最初の3文字だけ
-表示
+    st.write(f"**意味（ヒント）:** {cur['meaning'][:3]}...")  # 最初の3文字だけ表示
     
     user_ans = st.text_input("英訳は？", key="user_ans")
     
@@ -106,8 +104,7 @@ elif mode == "Review":
         user_ans = st.text_input("英訳は？", key="review_ans")
         
         if st.button("送信"):
-            correct = user_ans.strip().lower() == 
-cur['meaning'].strip().lower()
+            correct = user_ans.strip().lower() == cur['meaning'].strip().lower()
             append_answer(
                 timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 word=cur['word'],
