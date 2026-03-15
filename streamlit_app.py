@@ -82,8 +82,7 @@ if mode == "Quiz":
         else:
             st.error(f"❌ 誤り。正しい答えは「{cur['meaning']}」です。")
         # 次の単語に移行
-        st.session_state.current_word = 
-random.choice(words_df.to_dict('records'))
+        st.session_state.current_word = random.choice(words_df.to_dict('records'))
         st.experimental_rerun()  # 状態更新を確実に
 
 # -----------------------------
