@@ -296,8 +296,7 @@ def show_review_quiz():
         current_word = wrong_words[st.session_state.current_question]
         options = create_quiz_option(current_word)
         
-        st.header(f"復習問題 {st.session_state.current_question + 1} / 
-{len(wrong_words)}")
+        st.header(f"復習問題 {st.session_state.current_question + 1} / {len(wrong_words)}")
         st.subheader(f"英単語: {current_word['word']}")
         
         user_answer = st.radio("意味を選択してください:", options)
