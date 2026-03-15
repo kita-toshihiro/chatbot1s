@@ -89,8 +89,7 @@ init_db()
 # --- セッション管理 (St.session_state) ---
 if 'quiz_data' not in st.session_state:
     # アプリ開始時（ファイル読み込み）
-    # CSV を直接使うため、DB に格納した履歴データは session_state 内に持たな
-いが、
+    # CSV を直接使うため、DB に格納した履歴データは session_state 内に持たないが、
     # ユーザー入力部分は Session State で保持する
     
     # CSV の列名を確定させる
