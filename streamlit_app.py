@@ -19,11 +19,9 @@ def init_db():
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         
-        # 単語テーブル（一応の念のため、CSV から読み込ませるため DB 内の管理
-用テーブルも作ります）
+        # 単語テーブル（一応の念のため、CSV から読み込ませるため DB 内の管理用テーブルも作ります）
         """ 
-           もし words.csv を直接参照するなら history に id を入れるだけなの
-で、
+           もし words.csv を直接参照するなら history に id を入れるだけなので、
            CSV ファイルの行番号を ID として扱います。
         """
 
@@ -53,8 +51,7 @@ def init_db():
         conn.close()
 
 def load_words():
-    """CSV から単語リストをロード（DB を参照する場合の補助情報も持てば良いが
-、シンプルに CSV の row_id で管理）"""
+    """CSV から単語リストをロード（DB を参照する場合の補助情報も持てば良いが、シンプルに CSV の row_id で管理）"""
     if not os.path.exists(WORD_CSV):
         st.error("❌ words.csv というファイルが見つかりません。")
         return pd.DataFrame()
@@ -65,12 +62,10 @@ def load_words():
         # CSV の列指定（もし header がなかった場合は colnames を確認）
         # ここでは 'word' と 'meaning' があると仮定します
         if 'id' not in df.columns and 'word' not in df.columns:
-            st.error("❌ words.csv のカラム名が 'id', 'word', 'meaning' であ
-りません。")
+            st.error("❌ words.csv のカラム名が 'id', 'word', 'meaning' でありません。")
             return pd.DataFrame()
         
-        return df.reset_index(drop=True) # 0 から始まる index を ID として扱
-うためリセット
+        return df.reset_index(drop=True) # 0 から始まる index を ID として扱うためリセット
         
     except Exception as e:
         st.error(f"❌ CSV 読み込みエラー：{e}")
@@ -118,13 +113,11 @@ if mode == "📝 単語学習":
         st.subheader(f"現在の単語数：{len(st.session_state.df_data)} 語")
 
         # ランダム選択 (SessionState で保持する現在のクイズ用データ)
-        if 'current_word' not in st.session_state or 'history_count' not 
-in st.session_state:
+        if 'current_word' not in st.session_state or 'history_count' not in st.session_state:
             st.session_state.history_count = 0
             import random
             # ランダムな単語を選択（セッションに格納）
-            target_id = random.randint(0, len(st.session_state.df_data) - 
-1)
+            target_id = random.randint(0, len(st.session_state.df_data) - 1)
             w = st.session_state.df_data[target_id]
             st.session_state.current_word = {
                 "id": w['id'],
@@ -148,8 +141,7 @@ in st.session_state:
             
             if st.button("チェックする"):
                 # 正答判定
-                is_correct = check_word_correct(user_input, 
-target['meaning'])
+                is_correct = check_word_correct(user_input, target['meaning'])
                 
                 # UI Feedback
                 if is_correct:
@@ -165,10 +157,8 @@ target['meaning'])
                 
                 # 履歴保存
                 sql = f"""
-                    INSERT INTO quiz_history (word_id, word_text, 
-translation_text, correct_answer, is_correct, created_at)
-                    VALUES ({record_id}, "{target['word']}", 
-"{user_input}", "{target['meaning']}", {is_correct}, "{now}")
+                    INSERT INTO quiz_history (word_id, word_text, translation_text, correct_answer, is_correct, created_at)
+                    VALUES ({record_id}, "{target['word']}", "{user_input}", "{target['meaning']}", {is_correct}, "{now}")
                 """
                 cur.execute(sql)
                 
@@ -178,18 +168,15 @@ translation_text, correct_answer, is_correct, created_at)
                     cur.execute(f"""
                         UPDATE word_stats 
                         SET total_attempts = total_attempts + 1,
-                            correct_attempts = CASE WHEN {is_correct} THEN 
-correct_attempts + 1 ELSE correct_attempts END
+                            correct_attempts = CASE WHEN {is_correct} THEN correct_attempts + 1 ELSE correct_attempts END
                         WHERE id = {record_id}
                     """)
                 except Exception as e:
                     # カラムが存在しない場合（DB 再構築のタイミング）
                     try:
                         cur.execute(f"""
-                            INSERT OR IGNORE INTO word_stats (id, 
-word_text, total_attempts, correct_attempts)
-                            VALUES ({record_id}, "{target['word']}", 1, 
-{int(is_correct)})
+                            INSERT OR IGNORE INTO word_stats (id, word_text, total_attempts, correct_attempts)
+                            VALUES ({record_id}, "{target['word']}", 1, {int(is_correct)})
                         """)
                     except Exception as e2:
                         pass # カラム追加エラー
@@ -199,14 +186,12 @@ word_text, total_attempts, correct_attempts)
                 st.session_state.history_count += 1
                 
                 # セッションで最大出題数制限（例：5 問）を設けるかどうか？
-                if st.session_state.history_count >= SESSION_HISTORY_LIMIT 
-and SESSION_HISTORY_LIMIT > 0:
+                if st.session_state.history_count >= SESSION_HISTORY_LIMIT and SESSION_HISTORY_LIMIT > 0:
                     st.warning("本日の学習完了です。")
                     
         # リセットボタンの表示（次の単語を表示したい場合）
         if st.session_state.history_count > 0:
-            st.button("次へ（新しい単語を表示）", on_click=lambda: None, 
-key='fake_reset') # ダミーボタン
+            st.button("次へ（新しい単語を表示）", on_click=lambda: None, key='fake_reset') # ダミーボタン
             
         # 履歴からエクスポートさせるためのボタン（本日の結果だけ？）
         pass 
@@ -218,8 +203,7 @@ elif mode == "📂 履歴・復習":
     
     # SQL クエリ：全ての結果をフェッチ
     query_all = """
-        SELECT word_id, word_text, translation_text, correct_answer, 
-is_correct 
+        SELECT word_id, word_text, translation_text, correct_answer, is_correct 
         FROM quiz_history 
         ORDER BY created_at DESC;
     """
@@ -244,8 +228,7 @@ is_correct
                     st.dataframe(df_mistake)
                     
                     # エクスポートボタン（CSV に書き出し）
-                    csv_data = 
-df_mistake.to_csv(index=False).encode('utf-8')
+                    csv_data = df_mistake.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="📥 ミスだけを CSV で保存",
                         data=csv_data,
@@ -256,8 +239,7 @@ df_mistake.to_csv(index=False).encode('utf-8')
                     st.success("学習ミスはありません。完璧です！")
 
         else:
-            st.info("履歴データがありません。まずは「単語学習」を行ってくだ
-さい。")
+            st.info("履歴データがありません。まずは「単語学習」を行ってください。")
 
     except Exception as e:
         st.error(f"DB 読み込みエラー：{e}")
