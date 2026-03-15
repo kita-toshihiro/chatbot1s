@@ -66,9 +66,7 @@ st.session_state.word_index)
         user_answer = st.text_input("意味を入力してください:")
 
         if st.button("解答"):
-            st.session_state.answered, st.session_state.wrong_words = 
-check_answer(user_answer, meaning, word, st.session_state.word_index, 
-st.session_state.answered, st.session_state.wrong_words)
+            st.session_state.answered, st.session_state.wrong_words = check_answer(user_answer, meaning, word, st.session_state.word_index, st.session_state.answered, st.session_state.wrong_words)
 
     # 解答履歴の表示
     st.subheader("解答履歴")
