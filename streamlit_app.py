@@ -40,8 +40,7 @@ def save_answer(word, is_correct):
 # 間違えた単語の取得
 def get_mistakes():
     conn = sqlite3.connect('quiz.db')
-    df = pd.read_sql_query("SELECT DISTINCT word FROM quiz_history WHERE 
-correct = 0", conn)
+    df = pd.read_sql_query("SELECT DISTINCT word FROM quiz_history WHERE correct = 0", conn)
     conn.close()
     return df['word'].tolist()
 
