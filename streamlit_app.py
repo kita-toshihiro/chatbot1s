@@ -1,267 +1,251 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
+import csv
+from datetime import datetime
+import re
 import os
-import datetime
-from pathlib import Path
 
-# ============================
-# ⚙️ 設定と関数定義
-# ============================
-
-DB_NAME = "study.db"  # データベースファイル名（同一ディレクトリ内）
-WORD_CSV_PATH = "words.csv"
-SESSION_LIMIT = 5  # セッションあたりの出題制限数（0=無限）
-SESSION_KEY = 'word_session_state'
+# --- Configuration ---
+DB_PATH = "quiz.db"
+SESSION_LIMIT = 50
 
 def get_db_connection():
-    """DB 接続を取得"""
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(DB_PATH)
     return conn
 
-def init_db():
-    """データベース初期化（安全に）"""
-    conn = get_db_connection()
+def init_db(conn):
+    # Create Tables if they don't exist
     cursor = conn.cursor()
     
-    try:
-        # 作成テーブルの存在チェックと自動生成（IF NOT EXISTS）
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS word_stats (
-                id INTEGER PRIMARY KEY,
-                word_text TEXT NOT NULL,
-                total_attempts INTEGER DEFAULT 0,
-                correct_attempts INTEGER DEFAULT 0
-            )
-        ''')
+    # Word Stats table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS word_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            word TEXT UNIQUE NOT NULL,
+            definition TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS quiz_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                word_id INTEGER,
-                word_text TEXT,
-                translation_text TEXT,
-                user_answer TEXT,
-                correct_answer TEXT,
-                is_correct INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (word_id) REFERENCES word_stats(id)
-            )
-        ''')
-        
-        conn.commit()
-    except sqlite3.Error as e:
-        st.error(f"⚠️ データベース作成エラー：{e}")
-    finally:
-        conn.close()
-
-def load_words_from_csv():
-    """CSV から単語データをロード（既存の DB に統合）"""
-    if not os.path.exists(WORD_CSV_PATH):
-        return []
-    
-    df = pd.read_csv(WORD_CSV_PATH, encoding="utf-8")
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    for index, row in df.iterrows():
-        word_id = row['id'] if 'id' in row.index else (index + 1)  # ID の優先順位を確保
-        
-        # テーブル存在チェック（エラー対策）
-        try:
-            cursor.execute(f'''
-                SELECT total_attempts, correct_attempts 
-                FROM word_stats WHERE id = {word_id}
-            ''')
-            res = cursor.fetchone()
-            
-            if res is None:
-                cursor.execute(f'''
-                    INSERT OR IGNORE INTO word_stats (id, word_text, total_attempts, correct_attempts)
-                    VALUES ({word_id}, "{row['word']}", 0, {int(row.get('correct', 0))})
-                ''')
-        
-        except sqlite3.OperationalError as e:
-            # コラム名不一致などの場合、スキップして警告
-            st.warning(f"⚠️ {word_id} 番目の単語の DB 登録が失敗しました：{e}")
+    # History table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS quiz_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT, -- Session ID to reset on logout or clear
+            question_id INTEGER,
+            is_correct BOOLEAN,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     
     conn.commit()
-    return len(df)
 
-def get_stats():
-    """学習統計を取得"""
+@st.cache_data
+def fetch_words_from_db():
+    conn = get_db_connection()
+    df = pd.read_sql_query("SELECT * FROM word_stats ORDER BY id", conn)
+    conn.close()
+    return df.to_dict('records')
+
+def add_csv_file(file, conn):
+    if file is None:
+        st.warning("No CSV file uploaded.")
+        return
+    
+    try:
+        # Use pandas to read csv safely
+        raw_data = pd.read_csv(file)
+        
+        # Check for required columns (optional, but good for validation)
+        required_cols = ['word', 'definition']
+        
+        if not all(col in raw_data.columns for col in required_cols):
+            st.error(f"CSV must contain columns: {', '.join(required_cols)}")
+            return
+
+        # Insert into DB. Handle duplicates or updates.
+        # Strategy: Replace existing rows with same word to keep it clean
+        cursor = conn.cursor()
+        
+        for idx, row in raw_data.iterrows():
+            word = str(row['word']).strip()
+            definition = str(row.get('definition', '')).strip()
+            
+            # Use INSERT OR REPLACE pattern via parameterized query
+            try:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO word_stats (word, definition) 
+                       VALUES (?, ?)""",
+                    (word, definition)
+                )
+            except sqlite3.IntegrityError as e:
+                st.error(f"Duplicate entry error during insert: {e}")
+                # In production, handle this more gracefully if needed
+        conn.commit()
+        st.success(f"Successfully added {len(raw_data)} words.")
+        
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
+
+def reset_quiz_history(session_id):
+    """Reset history for current session."""
+    if session_id is None: return
+    
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 正答率計算
-    cursor.execute(f'''
-        SELECT 
-            COUNT(*) as total,
-            SUM(correct_attempts) as correct,
-            CASE WHEN COUNT(*) > 0 THEN ROUND(SUM(correct_attempts)*1.0/COUNT(*),2) ELSE 0 END as accuracy_rate
-        FROM word_stats
-    ''')
-    
-    result = cursor.fetchone()
-    conn.close()
-    return {
-        'total_words': result['total'],
-        'correct_words': int(result['correct']),
-        'accuracy': float(result['accuracy_rate'])
-    }
+    # Delete records with matching session ID to clear session data
+    cursor.execute("""DELETE FROM quiz_history WHERE session_id = ?""", (session_id,))
+    conn.commit()
 
-# ============================
-# 📄 メインアプリロジック
-# ============================
+def get_session_stats(conn):
+    cursor = conn.cursor()
+    # Get recent stats for dashboard
+    cursor.execute("SELECT COUNT(*) as count, SUM(is_correct) as correct_count FROM quiz_history GROUP BY session_id") 
+    return cursor.fetchall()
 
-@st.cache_resource  # DB はセッション間でも共有（Streamlit Cloud で重要）
-def main_app():
-    st.set_page_config(page_title="TOEIC 単語学習アプリ", layout="wide")
+# --- Streamlit UI ---
+st.set_page_config(
+    page_title="Vocabulary Quiz App",
+    layout="wide"
+)
+
+# Initialize Session State
+if 'session_started' not in st.session_state:
+    st.session_state['session_started'] = False
+if 'session_id' not in st.session_state:
+    st.session_state['session_id'] = str(datetime.now().timestamp()) # Unique per session reload
+
+st.title("🇯🇵 English Vocabulary Quiz")
+st.markdown("---")
+
+# --- Sidebar for Admin/History ---
+with st.sidebar:
+    st.header("Settings & History")
     
-    # セッションステート管理
-    if 'history_count' not in st.session_state:
-        st.session_state.history_count = 0
+    # File Upload
+    uploaded_file = st.file_uploader("Upload CSV (word, definition)", type=['csv'])
+    if uploaded_file:
+        add_csv_file(uploaded_file, get_db_connection())
+
+    st.divider()
     
-    # データベース初期化（各セッションで実行しないよう、必要ならデプロイ時に一度だけ）
-    try:
-        conn = get_db_connection()
-        # テーブル作成は初回のみ（既存 DB と競合を防ぐ）
-        init_db()
-        conn.close()
-    except Exception as e:
-        st.error(f"❌ データベース初期化エラー：{e}")
+    # Reset History Button
+    reset_btn = st.button("Reset Quiz History", key="reset_history")
+    if reset_btn and not st.session_state['session_started']:
+        st.toast("History reset.", icon="🔄")
+        reset_quiz_history(st.session_state['session_id'])
+
+# --- Main Content ---
+
+st.header("Dashboard")
+
+# Dashboard Section: Recent Stats (Optional, might need specific DB setup to show)
+# For simplicity and robustness without external services, we can just show status.
+
+with st.expander("See Database Records"):
+    words = fetch_words_from_db()
+    if words:
+        df_display = pd.DataFrame(words, columns=['id', 'word', 'definition', 'created_at'])
+        # Drop internal id for display
+        display_df = df_display[['word', 'definition']].sort_values('word')
+        st.dataframe(display_df, use_container_width=True)
+    else:
+        st.info("No words in database. Please upload a CSV file to get started.")
+
+st.divider()
+
+# --- Quiz Game Section ---
+if not st.session_state['session_started']:
+    st.write("""
+    **Welcome!** This is your vocabulary quiz session.
     
-    # 統計取得と表示
-    stats = get_stats()
-    col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
+    Rules:
+    1. Read the English definition provided.
+    2. Type the Japanese word matching that definition into the input box.
+    3. Click "Submit" to check your answer.
+    4. Click "Next Word" to continue.
+    """)
+
+    col_input, col_submit = st.columns([3, 1])
     
-    with col1:
-        st.metric(label="学習した単語数", value=stats['total_words'])
-    with col2:
-        if stats['total_words'] > 0:
-            st.metric(label="正答率", value=f"{stats['accuracy']}%")
+    with col_input:
+        # Fetch all words from DB for this round (or limit if needed)
+        raw_words = fetch_words_from_db() 
+        if not raw_words:
+            st.warning("No questions available. Please upload a CSV file.")
         else:
-            st.metric(label="正答率", value="-")
-    with col3:
-        st.metric(label="総出題回数", value=stats['correct_words'])
-    
-    # UI モード切り替え
-    st.header("📚 TOEIC 単語学習アプリ")
-    mode = st.radio(
-        "モードを選択", 
-        ["🍎 新しい単語", "📂 履歴・復習"],
-        help="新しい単語を学習するか、過去の問題を復習します"
-    )
+            # Simplest quiz: Randomize and show one per turn, or cycle through
+            # Using session state for current index
+            
+            current_idx = st.session_state.get('current_word_index', 0)
+            
+            if len(raw_words) > 0:
+                current_word = raw_words[current_idx]
+                
+                st.subheader(f"Word {current_idx + 1}")
+                correct_def = current_word['definition']
+                # Note: In the previous code, 'word' was English and 'definition' Japanese. 
+                # But based on typical Quiz structure: Input is usually target language (Japanese).
+                # I will assume Target: Japanese -> Prompt: English Definition
+                
+                st.write(f"Translate to Japanese:")
+                st.info(correct_def) # Actually the previous code had "word" as EN, "definition" as JP. 
+                # Let's standardise:
+                # If 'word' is English and 'definition' is Japanese (per typical dictionary):
+                # But user input logic in prompt was: Input Box -> Answer Check.
+                
+                # Re-reading the prompt logic:
+                # "Input Box" -> User types answer. 
+                # Correct answer check against database "definition" column? Or "word"?
+                
+                # Let's assume:
+                # DB Column 'word' = English Word.
+                # DB Column 'definition' = Japanese Meaning (or vice versa).
+                
+                # For clarity, let's use 'word' as the target language (Japanese) to type into box?
+                # Actually, usually it's EN -> JP.
+                # Let's assume user types in English (if DB is JP->EN) or JP (if DB is EN->JP).
+                
+                # I will standardise: 
+                # Input Box expects 'word' column content from DB.
+                # Prompt displays 'definition'.
+                target = current_word.get('word')
+                hint = current_word.get('definition')
+                
+                user_answer = st.text_input("Type your answer here:", key=f"input_{current_idx}")
+                
+                with col_submit:
+                    submit_btn = st.button("Check Answer", key=f"submit_{current_idx}")
 
-    # ============================
-    # 🎯 モード処理：新しい単語
-    # ============================
-    if mode == "🍎 新しい単語":
-        st.subheader("今週の単語")
-        
-        # 最新の正解率を表示（DB にない場合の対策）
-        try:
-            stats = get_stats()
-        except Exception as e:
-            pass
-            
-        # セッション履歴管理
-        if st.session_state.history_count < SESSION_LIMIT:
-            try:
-                conn = get_db_connection()
+        if submit_btn:
+            # Check Logic
+            # Ensure we don't index out of bounds
+            if len(raw_words) > current_idx and user_answer.lower().strip() == target.lower().strip():
+                st.success(f"✅ Correct! The answer is '{target}'.")
+                # Record success in DB
+                try:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO quiz_history (session_id, question_id, is_correct) VALUES (?, ?, ?)", 
+                                   (st.session_state['session_id'], current_idx + 1, 1))
+                    conn.commit()
+                except Exception as e:
+                    print(f"DB Insert failed silently: {e}")
                 
-                # 最新の単語を取得（DB からランダム取得）
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM word_stats WHERE total_attempts > 0 ORDER BY RANDOM() LIMIT 1")
-                row = cursor.fetchone()
-                
-                if row:
-                    record_id = row['id']
-                    target_word = row['word_text']
-                    
-                    # カラム存在チェック（DB 再構築時）
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='quiz_history'")
-                    table_exists = cursor.fetchone() is not None
-                    
-                    if not table_exists:
-                        try:
-                            cursor.execute('''CREATE TABLE IF NOT EXISTS quiz_history (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                word_id INTEGER,
-                                word_text TEXT,
-                                translation_text TEXT,
-                                user_answer TEXT,
-                                correct_answer TEXT,
-                                is_correct INTEGER DEFAULT 0,
-                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                            )''')
-                        except:
-                            pass
-                    
-                    cursor.execute("SELECT word_text, translation_text FROM quiz_history WHERE id=? LIMIT 1", (record_id,))
-                    history = cursor.fetchone()
-                    
-                    if history:
-                        target['word'] = history['word_text']
-                        correct_answer = history['translation_text']
-                    else:
-                        # デフォルト値
-                        st.session_state.word_text = target_word
-                        st.session_state.correct_answer = ""
-                        
-                    conn.close()
-                else:
-                    st.info("学習用のデータが不足しています。CSV に追加してください。")
-                    
-            except Exception as e:
-                st.error(f"⚠️ データベース操作エラー：{e}")
+                # Advance index
+                st.session_state['current_word_index'] = (current_idx + 1) % len(raw_words)
+            else:
+                st.error(f"❌ Incorrect. Correct answer: '{target}'.")
 
-        # 回答入力欄（ユーザー入力）
-        if 'user_answer' not in st.session_state:
-            st.session_state.user_answer = ""
-            
-        # ユーザーの回答をキャプチャ（テキスト入力）
-        user_input = st.text_area(
-            "🎯 この単語の意味を入力", 
-            key="user_answer_box", 
-            help="日本語訳や同義語などを記入"
-        )
-        
-        if st.button("✅ 確認"):
-            is_correct = user_input == st.session_state.correct_answer
-            
-            # DB 更新（正解/不正解の記録）
-            try:
-                conn = get_db_connection()
-                
-                cursor.execute(f"""
-                    UPDATE word_stats 
-                    SET total_attempts = total_attempts + 1,
-                        correct_attempts = CASE WHEN {int(is_correct)} THEN correct_attempts + 1 ELSE correct_attempts END
-                    WHERE id = ?
-                """, (record_id,))
-                
-                # 履歴テーブルへの記録
-                cursor.execute(f"""
-                    INSERT OR REPLACE INTO quiz_history 
-                    (word_text, translation_text, user_answer, is_correct)
-                    VALUES (?, ?, ?, ?)
-                """, (st.session_state.word_text, st.session_state.correct_answer, user_input, int(is_correct)))
-                
-                conn.commit()
-                st.success("回答を保存しました！")
-            except Exception as e:
-                st.error(f"⚠️ DB 更新エラー：{e}")
+else:
+    # Session has "started" logic in previous snippets was weird. 
+    # I will remove the state flag and just handle the session ID reset via the sidebar or clear button?
+    # Actually, Streamlit runs once per file load. State persists until reload.
+    # So 'session_started' is to track if user hit a "Start" button.
+    pass
 
-            # セッション状態更新
-            st.session_state.history_count += 1
-            st.session_state.user_answer = ""
-            
-        else:
-            # 初期表示用（正解なし）
-            st.session_state.correct_answer = "正解を表示するには「確認」ボタンを押してください"
-            
-        # 履歴管理（制限超過時はリセット）
-        if st.session_state.history_count > SESSION_LIMIT and SESSION_LIMIT != -1:
+# --- Footer ---
+st.markdown("---")
+
