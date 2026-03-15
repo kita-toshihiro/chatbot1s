@@ -143,8 +143,7 @@ def create_quiz_option(correct_answer):
     
     while len(options) < 4:
         random_word = random.choice(other_words)
-        if random_word['word'] != correct_answer['word'] and random_word['word'] not in 
-options:
+        if random_word['word'] != correct_answer['word'] and random_word['word'] not in options:
             options.append(random_word['word'])
     
     random.shuffle(options)
