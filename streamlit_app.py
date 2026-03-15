@@ -6,8 +6,7 @@ import random
 try:
     df = pd.read_csv("data.csv")
 except FileNotFoundError:
-    st.error("data.csv が見つかりません。ファイルが存在することを確認してく
-ださい。")
+    st.error("data.csv が見つかりません。ファイルが存在することを確認してください。")
     st.stop()
 
 # --- セッションステートの初期化 ---
